@@ -1,0 +1,17 @@
+# Logs
+*.log
+
+# Local downloads / test artifacts
+*.zip
+*.tmp
+*.bak
+
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Editors
+.vscode/
+.idea/
+*.swp
