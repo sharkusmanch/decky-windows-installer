@@ -84,9 +84,12 @@ $ErrorActionPreference = 'Stop'
 # --- paths
 $HomebrewDir   = Join-Path $env:USERPROFILE 'homebrew'
 $ServicesDir   = Join-Path $HomebrewDir 'services'
-$ManifestPath  = Join-Path $HomebrewDir '.install-manifest.json'
 $LogDir        = Join-Path $env:LOCALAPPDATA 'decky-installer'
 $LogPath       = Join-Path $LogDir 'install.log'
+# Manifest lives outside homebrew\ because Decky's settings.py migrates
+# dotfiles in homebrew\ into homebrew\settings\ on startup, which collides
+# with our manifest and crashes Decky.
+$ManifestPath  = Join-Path $LogDir 'install-manifest.json'
 $DesktopPath   = [Environment]::GetFolderPath('Desktop')
 $StartupPath   = [Environment]::GetFolderPath('Startup')
 $ShortcutDecky = Join-Path $DesktopPath 'Steam (Decky).lnk'

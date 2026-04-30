@@ -123,7 +123,7 @@ On install:
 11. Creates **Decky Loader.lnk** in the Startup folder (target: `PluginLoader_noconsole.exe`) unless `-NoAutoStart`.
 12. Reports SHA256 and Authenticode signature status of `PluginLoader_noconsole.exe`.
 13. Launches `PluginLoader_noconsole.exe` unless `-NoLaunch` (`-Confirm` will prompt before launch).
-14. Writes a v2 install manifest to `%USERPROFILE%\homebrew\.install-manifest.json`. Updated incrementally after each step so a partial install still leaves an accurate record.
+14. Writes a v2 install manifest to `%LOCALAPPDATA%\decky-installer\install-manifest.json`. Updated incrementally after each step so a partial install still leaves an accurate record. (Kept outside `homebrew\` so it doesn't collide with Decky's own startup-time settings migration.)
 
 On uninstall (manifest-driven, with safety rails):
 
@@ -141,7 +141,7 @@ On uninstall (manifest-driven, with safety rails):
 |---|---|
 | `<SteamInstall>\.cef-enable-remote-debugging` | Required by Decky to attach to Steam's CEF |
 | `%USERPROFILE%\homebrew\services\PluginLoader*.exe` | Loader binaries |
-| `%USERPROFILE%\homebrew\.install-manifest.json` | Install manifest (used by `-Uninstall`) |
+| `%LOCALAPPDATA%\decky-installer\install-manifest.json` | Install manifest (used by `-Uninstall`) |
 | `%USERPROFILE%\Desktop\Steam (Decky).lnk` | Steam launcher with `-dev` |
 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Decky Loader.lnk` | Autostart (unless `-NoAutoStart`) |
 | `%LOCALAPPDATA%\decky-installer\install.log` | Persistent log |
