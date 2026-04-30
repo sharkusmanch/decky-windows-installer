@@ -21,16 +21,18 @@ Pick one option.
 ### Option 1: One-line remote install
 
 ```powershell
-$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f; & $f -ExpectedSha256 '<hash>'
+$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f; & $f -AllowUnpinned
 ```
 
-For higher assurance, pin to a specific commit so you know exactly which script revision you're running. Replace `main` with a commit SHA from this repo's history:
+`-AllowUnpinned` lets the script download the loader zip from the default URL without a SHA256 check. If you have a known-good hash, drop `-AllowUnpinned` and pass `-ExpectedSha256 '<hash>'` instead.
+
+For higher assurance about the **script** itself, pin to a specific commit so you know exactly which revision you're running. Replace `main` with a commit SHA from this repo's history:
 
 ```powershell
-$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/<commit-sha>/Install-DeckyLoader.ps1 -OutFile $f; & $f -ExpectedSha256 '<hash>'
+$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/<commit-sha>/Install-DeckyLoader.ps1 -OutFile $f; & $f -AllowUnpinned
 ```
 
-The script refuses to download from a URL without `-ExpectedSha256` unless you also pass `-AllowUnpinned`. Running a remote installer means trusting both the script and the loader binary — Option 2 lets you inspect both before running.
+Running a remote installer means trusting both the script and the loader binary — Option 2 lets you inspect both before running.
 
 ### Option 2: Clone and run
 
