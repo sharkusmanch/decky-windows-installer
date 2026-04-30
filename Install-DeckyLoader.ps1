@@ -576,10 +576,13 @@ function Invoke-Uninstall {
                 }
             }
         }
-        if (Test-Path $ManifestPath) {
-            if ($PSCmdlet.ShouldProcess($ManifestPath, 'Remove manifest')) {
-                Remove-Item $ManifestPath -Force -ErrorAction SilentlyContinue
-            }
+    }
+
+    # Manifest lives outside homebrew\, so it is removed regardless of
+    # whether -PurgeUserData was specified.
+    if (Test-Path $ManifestPath) {
+        if ($PSCmdlet.ShouldProcess($ManifestPath, 'Remove manifest')) {
+            Remove-Item $ManifestPath -Force -ErrorAction SilentlyContinue
         }
     }
 
