@@ -16,13 +16,35 @@ A PowerShell installer for [Decky Loader](https://github.com/SteamDeckHomebrew/d
 
 ## Install
 
-Open an **elevated** PowerShell (Run as Administrator), then:
+Open an **elevated** PowerShell (Run as Administrator), then pick one option.
+
+### Option 1: One-line remote install
 
 ```powershell
-C:\Users\theme\projects\decky-windows-installer\Install-DeckyLoader.ps1
+$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f; & $f
 ```
 
-Default behavior downloads the upstream Decky nightly via `nightly.link`. Note that this nightly is currently broken on Windows; you'll likely want to pass `-Source` pointing at a working fork build (see below).
+Pass parameters by appending them after `& $f`:
+
+```powershell
+$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f; & $f -Source 'C:\path\to\PluginLoader Win.zip' -ExpectedSha256 'A1B2...'
+```
+
+This downloads the script to `%TEMP%` and executes it. The `#Requires -RunAsAdministrator` directive at the top of the script will refuse to run if the shell is not elevated. Running a remote script means trusting this repo's `main` branch and its maintainer; for higher assurance use Option 2.
+
+### Option 2: Clone and run
+
+```powershell
+git clone https://github.com/sharkusmanch/decky-windows-installer.git
+cd decky-windows-installer
+.\Install-DeckyLoader.ps1
+```
+
+This lets you inspect `Install-DeckyLoader.ps1` before running it, and pin to a specific commit by checking it out.
+
+### Default source caveat
+
+Both options default `-Source` to upstream Decky's `build-win` workflow nightly via `nightly.link`. **This nightly is currently broken on Windows.** Pass `-Source` with a working fork URL or a local zip until upstream is fixed.
 
 After install:
 
@@ -121,4 +143,4 @@ On uninstall (manifest-driven):
 
 ## License
 
-No license has been chosen yet. The script is provided as-is.
+[MIT](LICENSE)
