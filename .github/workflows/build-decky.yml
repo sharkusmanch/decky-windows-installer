@@ -1,0 +1,150 @@
+name: Build Decky for Windows
+
+# Builds an unmodified upstream Decky Loader for Windows at a chosen
+# git ref, optionally publishing the resulting zip as a release in this
+# repository so the installer can pin to it.
+#
+# Decky Loader is GPLv2. The artifact this workflow produces is a binary
+# redistribution of unmodified upstream source. Source for any released
+# build is available at the upstream commit/tag that was checked out.
+
+on:
+  workflow_dispatch:
+    inputs:
+      decky_ref:
+        description: 'Upstream decky-loader ref to build (tag, branch, or SHA). e.g. v3.2.3 or main'
+        required: true
+        default: 'v3.2.3'
+      publish_release:
+        description: 'Publish a release in this repo with the built zip'
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag (default: decky-<ref>)'
+        required: false
+      make_latest:
+        description: 'Mark the release as latest'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Decky ${{ inputs.decky_ref }}
+    runs-on: windows-2022
+    steps:
+      - name: Checkout upstream decky-loader source
+        uses: actions/checkout@v4
+        with:
+          repository: SteamDeckHomebrew/decky-loader
+          ref: ${{ inputs.decky_ref }}
+          # poetry-dynamic-versioning needs full git history + tags to
+          # generate the embedded version string.
+          fetch-depth: 0
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Python 3.11.7
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.7'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: false
+
+      - name: Install Python dependencies
+        working-directory: ./backend
+        run: |
+          C:\Users\runneradmin\.local\bin\poetry self add "poetry-dynamic-versioning[plugin]"
+          C:\Users\runneradmin\.local\bin\poetry install --no-interaction
+
+      - name: Install JS dependencies
+        working-directory: ./frontend
+        run: |
+          npm i -g pnpm
+          pnpm i --frozen-lockfile --dangerously-allow-all-builds
+
+      - name: Build JS frontend
+        working-directory: ./frontend
+        run: pnpm run build
+
+      - name: Build Python backend (with console)
+        working-directory: ./backend
+        run: |
+          C:\Users\runneradmin\.local\bin\poetry dynamic-versioning
+          C:\Users\runneradmin\.local\bin\poetry run pyinstaller pyinstaller.spec
+
+      - name: Build Python backend (no console)
+        working-directory: ./backend
+        run: |
+          $env:DECKY_NOCONSOLE = '1'
+          C:\Users\runneradmin\.local\bin\poetry run pyinstaller pyinstaller.spec
+
+      - name: Capture embedded loader version
+        id: version
+        working-directory: ./backend
+        shell: pwsh
+        run: |
+          $version = (C:\Users\runneradmin\.local\bin\poetry version -s).Trim()
+          "version=$version" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+          Write-Host "Built decky_loader version: $version"
+
+      - name: Zip artifacts
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path backend/dist/PluginLoader.exe, backend/dist/PluginLoader_noconsole.exe `
+            -DestinationPath PluginLoader-Win.zip `
+            -Force
+
+      - name: Compute SHA256
+        id: hash
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash PluginLoader-Win.zip -Algorithm SHA256).Hash
+          "sha256=$hash" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+          "## Build summary`n- decky-loader ref: ``${{ inputs.decky_ref }}```n- embedded version: ``${{ steps.version.outputs.version }}```n- zip SHA256: ``$hash``" `
+            | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PluginLoader-Win
+          path: PluginLoader-Win.zip
+
+      - name: Publish release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || format('decky-{0}', inputs.decky_ref) }}
+          name: Decky ${{ inputs.decky_ref }} (Windows)
+          make_latest: ${{ inputs.make_latest }}
+          files: PluginLoader-Win.zip
+          body: |
+            Windows build of [Decky Loader ${{ inputs.decky_ref }}](https://github.com/SteamDeckHomebrew/decky-loader/tree/${{ inputs.decky_ref }}).
+
+            - Embedded `decky_loader` version: `${{ steps.version.outputs.version }}`
+            - Built from unmodified upstream source by [`build-decky.yml`](https://github.com/sharkusmanch/decky-windows-installer/blob/main/.github/workflows/build-decky.yml).
+            - Decky Loader is licensed under [GPLv2](https://github.com/SteamDeckHomebrew/decky-loader/blob/main/LICENSE.md). Source for this build: <https://github.com/SteamDeckHomebrew/decky-loader/tree/${{ inputs.decky_ref }}>.
+
+            ## SHA256
+
+            ```
+            ${{ steps.hash.outputs.sha256 }}  PluginLoader-Win.zip
+            ```
+
+            ## Install
+
+            ```powershell
+            $f="$env:TEMP\Install-DeckyLoader.ps1"
+            iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f
+            & $f -Source 'https://github.com/sharkusmanch/decky-windows-installer/releases/download/${{ inputs.release_tag != '' && inputs.release_tag || format('decky-{0}', inputs.decky_ref) }}/PluginLoader-Win.zip' `
+                 -ExpectedSha256 '${{ steps.hash.outputs.sha256 }}'
+            ```
