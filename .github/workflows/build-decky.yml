@@ -26,6 +26,21 @@ on:
         description: 'Mark the release as latest'
         type: boolean
         default: true
+  workflow_call:
+    inputs:
+      decky_ref:
+        type: string
+        required: true
+      publish_release:
+        type: boolean
+        default: false
+      release_tag:
+        type: string
+        required: false
+        default: ''
+      make_latest:
+        type: boolean
+        default: true
 
 permissions:
   contents: write

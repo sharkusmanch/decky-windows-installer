@@ -1,0 +1,77 @@
+name: Watch upstream Decky releases
+
+# Polls SteamDeckHomebrew/decky-loader's latest release every few hours.
+# When a new release tag appears that we have not built yet, calls
+# build-decky.yml to build and publish the corresponding Windows zip,
+# then appends to .builds (which both records the build and counts as
+# repo activity to keep this scheduled workflow alive — GitHub auto-
+# disables scheduled workflows after 60 days of repo inactivity).
+
+on:
+  schedule:
+    # Every 6 hours, on the hour.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: watch-upstream
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build:    ${{ steps.cmp.outputs.build }}
+      tag:      ${{ steps.cmp.outputs.tag }}
+      our_tag:  ${{ steps.cmp.outputs.our_tag }}
+    steps:
+      - id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          upstream=$(gh api repos/SteamDeckHomebrew/decky-loader/releases/latest -q .tag_name)
+          our_tag="decky-${upstream}"
+          echo "Upstream latest release: $upstream"
+          echo "Looking for our tag:    $our_tag"
+          if gh release view "$our_tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Already built; nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Need to build."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$upstream" >> "$GITHUB_OUTPUT"
+            echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    uses: ./.github/workflows/build-decky.yml
+    with:
+      decky_ref: ${{ needs.check.outputs.tag }}
+      publish_release: true
+      release_tag: ${{ needs.check.outputs.our_tag }}
+      make_latest: true
+
+  record:
+    needs: [check, build]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Append to .builds and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "${ts}  ${{ needs.check.outputs.tag }} -> ${{ needs.check.outputs.our_tag }}" >> .builds
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .builds
+          git commit -m "Built decky ${{ needs.check.outputs.tag }}"
+          git push

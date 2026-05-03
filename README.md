@@ -56,7 +56,7 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 | Parameter | Type | Description |
 |---|---|---|
 | `-Uninstall` | switch | Reverse the install using the manifest |
-| `-Source` | string | Local zip path or HTTP(S) URL. Default: upstream nightly via nightly.link |
+| `-Source` | string | Local zip path or HTTP(S) URL. Default: this repo's `releases/latest` Windows asset (auto-built from upstream Decky tags by the build-decky workflow) |
 | `-ExpectedSha256` | string | Verify download SHA256 before extracting; abort on mismatch. Required for URL sources unless `-AllowUnpinned` is set |
 | `-AllowUnpinned` | switch | Permit URL downloads without SHA256 verification (not recommended) |
 | `-NoAutoStart` | switch | Skip the Startup folder shortcut |
@@ -69,24 +69,29 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 
 ## Examples
 
-**Default install (will refuse without `-ExpectedSha256` or `-AllowUnpinned`):**
+**Default install (latest of this repo's releases, no integrity check):**
 ```powershell
-.\Install-DeckyLoader.ps1 -ExpectedSha256 'A1B2C3...'
+.\Install-DeckyLoader.ps1 -AllowUnpinned
+```
+
+**Pinned install (recommended — copy the URL + SHA from a [release page](https://github.com/sharkusmanch/decky-windows-installer/releases)):**
+```powershell
+.\Install-DeckyLoader.ps1 `
+    -Source 'https://github.com/sharkusmanch/decky-windows-installer/releases/download/decky-v3.2.3/PluginLoader-Win.zip' `
+    -ExpectedSha256 '98B9587FA171806730D9489737228BB8FC01066E6856B5928DD8F50D4384D344'
 ```
 
 **Install from a local zip (no SHA256 needed for local files):**
 ```powershell
-.\Install-DeckyLoader.ps1 -Source 'C:\Downloads\PluginLoader Win.zip'
+.\Install-DeckyLoader.ps1 -Source 'C:\Downloads\PluginLoader-Win.zip'
 ```
 
-**Install from a pinned upstream GitHub Release:**
+**Install directly from upstream Decky's nightly (unsupported — used to be the default):**
 ```powershell
 .\Install-DeckyLoader.ps1 `
-    -Source 'https://github.com/SteamDeckHomebrew/decky-loader/releases/download/<tag>/<asset>' `
-    -ExpectedSha256 '<hash>'
+    -Source 'https://nightly.link/SteamDeckHomebrew/decky-loader/workflows/build-win/main/PluginLoader%20Win.zip' `
+    -AllowUnpinned
 ```
-
-> **Note:** As of v3.2.3, upstream Decky's official releases only include the Linux `PluginLoader` binary — there is no `PluginLoader Win.zip` asset. The Windows build is published only as a GitHub Actions workflow artifact. Until upstream adds a Windows release asset, your options are: (a) download the workflow artifact manually and pass it as a local `-Source`, (b) use `nightly.link` with `-AllowUnpinned`, or (c) use a fork that publishes Windows builds in its releases.
 
 **Install without autostart and without launching:**
 ```powershell
@@ -149,10 +154,30 @@ On uninstall (manifest-driven, with safety rails):
 | `%LOCALAPPDATA%\decky-installer\install.log` | Persistent log |
 | `%TEMP%\PluginLoader-<timestamp>-<rand>.zip` | Temporary download (deleted after install or on failure) |
 
+## Building Decky for Windows
+
+Upstream Decky's official GitHub releases ship only the Linux `PluginLoader` binary. This repo includes a workflow ([`build-decky.yml`](.github/workflows/build-decky.yml)) that checks out upstream Decky source at any tag/branch/SHA and produces a matching Windows `PluginLoader-Win.zip`, optionally publishing it as a release here. The build mirrors upstream's `build-win.yml` exactly (Node 20, Python 3.11.7, Poetry + poetry-dynamic-versioning, pnpm, PyInstaller) so the binary is byte-equivalent to what upstream's CI would produce.
+
+A second workflow ([`watch-upstream.yml`](.github/workflows/watch-upstream.yml)) polls upstream every 6 hours; when a new release tag appears that we haven't built yet, it triggers the build, publishes a release here, and appends a line to `.builds`. The `.builds` commit doubles as activity that prevents GitHub from auto-disabling the schedule after 60 days.
+
+To trigger a build manually (e.g. of a specific tag or `main`):
+
+```powershell
+gh workflow run build-decky.yml --repo sharkusmanch/decky-windows-installer `
+    -f decky_ref=v3.2.3 -f publish_release=true
+```
+
+## QAM "update available" notification
+
+Decky's QAM update flow is broken on Windows in two independent ways:
+
+1. **`do_update()` looks for an asset literally named `PluginLoader.exe` in upstream's releases**, which doesn't exist there.
+2. **The file-replacement step is wrapped in `if ON_LINUX:`**, so even a successful download wouldn't be installed.
+
+To "update" on Windows, **re-run this installer**. It stops the loader, replaces the binaries, and restarts. Building from a tagged upstream release (the default) makes the embedded version exactly match the tag, so the QAM stops nagging.
+
 ## Known issues
 
-- **No upstream Windows release asset.** Upstream Decky only publishes the Linux `PluginLoader` binary in GitHub Releases. Windows builds come from Actions artifacts. Until that changes, pinning to a release URL with SHA256 isn't possible against upstream — see the example note above.
-- **Upstream nightly may be broken.** The default `-Source` points at upstream Decky's `build-win` workflow, which has had broken builds in the past. If install fails after extraction, pass `-Source` with a known-good local zip.
 - **Windows Defender / SmartScreen** may flag `PluginLoader.exe`. The script logs the binary's SHA256 and Authenticode signature status so you can compare against an expected value before launch. You may need to add `homebrew\services` to your antivirus exclusions.
 - **Port 1337 conflicts.** Decky listens on port 1337. Other software (notably Razer Synapse) can claim that port and prevent Decky from starting.
 - **Plugin compatibility on Windows is limited.** Confirmed working: Audio Loader, CSS Loader, IsThereAnyDeal For Deck, PlayCount, PlayTime, ProtonDB Badges, SteamGridDB, TabMaster, Web Browser. Other plugins may not work or may not display correctly.
@@ -161,7 +186,7 @@ On uninstall (manifest-driven, with safety rails):
 
 This script runs filesystem operations on your machine and (potentially) launches an unverified third-party binary. Treat it accordingly:
 
-- The script downloads `PluginLoader Win.zip` over HTTPS but, by default, that download has **no integrity pin**. Use `-ExpectedSha256` whenever possible.
+- The script downloads `PluginLoader-Win.zip` over HTTPS but, by default, that download has **no integrity pin**. Each release in this repo publishes the SHA256 in its body — use `-ExpectedSha256` with that value whenever possible.
 - The downloaded binary is **not signed by Microsoft or the Decky team**. The installer reports its SHA256 and Authenticode status before launch — compare these against a known-good reference if you have one.
 - The uninstall manifest lives in a user-writable directory. The script validates every path it reads from the manifest against an allowed-roots list before deleting, so a tampered manifest cannot direct deletion outside known locations even if the script runs elevated.
 - Zip extraction is Zip-Slip-checked. Each entry's resolved path must stay within the destination directory; otherwise extraction is refused.

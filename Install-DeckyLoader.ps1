@@ -19,9 +19,11 @@
     Reverse a previous installation using the manifest.
 
 .PARAMETER Source
-    Local zip path or HTTP(S) URL of PluginLoader Win.zip. Defaults to the
-    upstream Decky nightly via nightly.link. To install a known-good fork
-    build, pass that URL or a local file.
+    Local zip path or HTTP(S) URL of the PluginLoader zip. Defaults to the
+    `latest` release of this installer's own repo, which holds Windows
+    builds of Decky tagged from upstream releases (see the build-decky
+    workflow). To pin to a specific release version, pass the release-
+    specific URL with -ExpectedSha256.
 
 .PARAMETER ExpectedSha256
     Verify the download matches this SHA256 hash before extracting. Aborts
@@ -70,7 +72,7 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact='Medium')]
 param(
     [switch]$Uninstall,
-    [string]$Source = 'https://nightly.link/SteamDeckHomebrew/decky-loader/workflows/build-win/main/PluginLoader%20Win.zip',
+    [string]$Source = 'https://github.com/sharkusmanch/decky-windows-installer/releases/latest/download/PluginLoader-Win.zip',
     [string]$ExpectedSha256,
     [switch]$AllowUnpinned,
     [switch]$NoAutoStart,
