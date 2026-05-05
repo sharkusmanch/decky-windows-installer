@@ -63,6 +63,7 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 | `-NoLaunch` | switch | Don't launch PluginLoader after install |
 | `-PurgeUserData` | switch | On uninstall, also delete `%USERPROFILE%\homebrew` |
 | `-Force` | switch | Skip the "Steam is running" guard |
+| `-PatchSteamAutoStart` | switch | Add `-dev` to Steam's `HKCU\...\Run\Steam` autostart command so Decky loads when Steam launches at Windows login. Self-healing across re-installs. Reverted by `-Uninstall` |
 | `-WhatIf`, `-Confirm` | switch | Standard PowerShell `SupportsShouldProcess` switches; especially useful with `-Uninstall` |
 
 `Get-Help .\Install-DeckyLoader.ps1 -Detailed` shows the full comment-based help.
@@ -111,6 +112,11 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 **Full purge:**
 ```powershell
 .\Install-DeckyLoader.ps1 -Uninstall -PurgeUserData
+```
+
+**Install and patch Steam autostart so Decky works with "Launch Steam at startup":**
+```powershell
+.\Install-DeckyLoader.ps1 -AllowUnpinned -PatchSteamAutoStart
 ```
 
 ## What it does
@@ -167,6 +173,16 @@ gh workflow run build-decky.yml --repo sharkusmanch/decky-windows-installer `
     -f decky_ref=v3.2.3 -f publish_release=true
 ```
 
+## Steam "Launch at startup"
+
+If you have Steam set to launch at Windows startup (Settings → Interface → "Run Steam when my computer starts"), Steam writes its autostart command to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Steam` — and that command does not include `-dev`. Decky needs `-dev` to inject its UI; without it Steam runs but Decky's tab doesn't appear in the QAM, even though `PluginLoader_noconsole.exe` is running.
+
+The `-PatchSteamAutoStart` switch fixes this by appending `-dev` to that registry value. The fix is idempotent and **self-healing**: every subsequent install reapplies the patch, so when Steam rewrites its own autostart entry on a Steam update (which wipes the flag), the next time you re-run the installer the patch is back. `-Uninstall` reverts it.
+
+```powershell
+.\Install-DeckyLoader.ps1 -AllowUnpinned -PatchSteamAutoStart
+```
+
 ## QAM "update available" notification
 
 Decky's QAM update flow is broken on Windows in two independent ways:
@@ -181,6 +197,7 @@ To "update" on Windows, **re-run this installer**. It stops the loader, replaces
 - **Windows Defender / SmartScreen** may flag `PluginLoader.exe`. The script logs the binary's SHA256 and Authenticode signature status so you can compare against an expected value before launch. You may need to add `homebrew\services` to your antivirus exclusions.
 - **Port 1337 conflicts.** Decky listens on port 1337. Other software (notably Razer Synapse) can claim that port and prevent Decky from starting.
 - **Plugin compatibility on Windows is limited.** Confirmed working: Audio Loader, CSS Loader, IsThereAnyDeal For Deck, PlayCount, PlayTime, ProtonDB Badges, SteamGridDB, TabMaster, Web Browser. Other plugins may not work or may not display correctly.
+- **Steam's "Launch at startup" bypasses Decky** unless you re-run the installer with `-PatchSteamAutoStart`. See the [Steam "Launch at startup"](#steam-launch-at-startup) section above.
 
 ## Security notes
 

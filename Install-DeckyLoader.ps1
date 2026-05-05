@@ -49,6 +49,13 @@
 .PARAMETER Force
     Skip the "Steam is running" guard.
 
+.PARAMETER PatchSteamAutoStart
+    Patch Steam's "Launch at startup" registry entry (HKCU\...\Run\Steam)
+    to include the -dev flag, so Decky still loads when Steam is started
+    by Windows at login. Once enabled, subsequent installs reapply the
+    patch automatically (Steam may rewrite the entry on its own updates,
+    wiping the flag). Reverted by -Uninstall.
+
 .EXAMPLE
     .\Install-DeckyLoader.ps1 -Source 'C:\Downloads\PluginLoader Win.zip'
     Install from a local zip (no SHA256 needed for local files).
@@ -78,7 +85,8 @@ param(
     [switch]$NoAutoStart,
     [switch]$NoLaunch,
     [switch]$PurgeUserData,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$PatchSteamAutoStart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -336,6 +344,24 @@ function Resolve-PluginLoaderZip {
     return [pscustomobject]@{ Path = $tmp; IsTemp = $true; IsUrl = $true }
 }
 
+function Get-SteamAutoStartCommand {
+    # Returns the current value of HKCU\...\Run\Steam, or $null if absent.
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    return (Get-ItemProperty -Path $key -Name 'Steam' -ErrorAction SilentlyContinue).Steam
+}
+
+function Set-SteamAutoStartCommand {
+    param([Parameter(Mandatory)][string]$Value)
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    Set-ItemProperty -Path $key -Name 'Steam' -Value $Value
+}
+
+function Test-SteamAutoStartHasDev {
+    param([string]$Command)
+    if (-not $Command) { return $false }
+    return [bool]($Command -match '(^|\s)-dev(\s|$)')
+}
+
 function Remove-DirectorySafe {
     # Removes $Path recursively but refuses to traverse reparse points
     # (junctions / symlinks), which could redirect deletion outside the
@@ -417,17 +443,27 @@ Refusing to download from a URL without integrity verification.
             $createdCef = $true
         }
 
+        # Preserve patchedSteamAutoStart across re-installs so Steam updates
+        # that rewrite HKCU\...\Run\Steam (and wipe -dev) get re-patched on
+        # the next install.
+        $existingPatchedAutoStart = $false
+        if ($existing -and ($existing.PSObject.Properties.Name -contains 'patchedSteamAutoStart')) {
+            $existingPatchedAutoStart = [bool]$existing.patchedSteamAutoStart
+        }
+        $wantPatchAutoStart = [bool]$PatchSteamAutoStart -or $existingPatchedAutoStart
+
         $manifest = [ordered]@{
-            version           = 2
-            installedAt       = (Get-Date).ToString('o')
-            source            = $Source
-            sha256            = $sha
-            steamPath         = $steamPath
-            servicesDir       = $ServicesDir
-            deckyShortcut     = $null
-            autoStartShortcut = $null
-            cefDebugFile      = $cefFlag
-            createdCefFile    = $createdCef
+            version                 = 2
+            installedAt             = (Get-Date).ToString('o')
+            source                  = $Source
+            sha256                  = $sha
+            steamPath               = $steamPath
+            servicesDir             = $ServicesDir
+            deckyShortcut           = $null
+            autoStartShortcut       = $null
+            cefDebugFile            = $cefFlag
+            createdCefFile          = $createdCef
+            patchedSteamAutoStart   = $false
         }
 
         foreach ($d in $HomebrewDir, $ServicesDir) {
@@ -473,6 +509,25 @@ Refusing to download from a URL without integrity verification.
             Save-Manifest -Manifest $manifest
         } else {
             Write-Log 'Skipping Startup folder shortcut (-NoAutoStart)'
+        }
+
+        if ($wantPatchAutoStart) {
+            $current = Get-SteamAutoStartCommand
+            if (-not $current) {
+                Write-Log "No Steam autostart entry at HKCU\...\Run\Steam; skipping -PatchSteamAutoStart. (Enable Steam's 'Launch at startup' setting first.)" 'WARN'
+                $manifest.patchedSteamAutoStart = $existingPatchedAutoStart
+            } elseif (Test-SteamAutoStartHasDev -Command $current) {
+                Write-Log "Steam autostart already includes -dev; no change: $current"
+                $manifest.patchedSteamAutoStart = $existingPatchedAutoStart -or [bool]$PatchSteamAutoStart
+            } else {
+                $new = "$current -dev"
+                if ($PSCmdlet.ShouldProcess('HKCU\...\Run\Steam', 'Add -dev to Steam autostart')) {
+                    Write-Log "Patching Steam autostart: '$current' -> '$new'"
+                    Set-SteamAutoStartCommand -Value $new
+                    $manifest.patchedSteamAutoStart = $true
+                }
+            }
+            Save-Manifest -Manifest $manifest
         }
 
         Write-Log 'PluginLoader binary provenance:'
@@ -554,6 +609,21 @@ function Invoke-Uninstall {
             if ($PSCmdlet.ShouldProcess($cef, 'Remove CEF debug flag')) {
                 Write-Log "Removing $cef"
                 Remove-Item $cef -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    # Revert the Steam autostart -dev patch only if we recorded that we
+    # added it. The registry path is hardcoded (not read from manifest)
+    # so a tampered manifest can't redirect this to a different key.
+    $patchedAutoStart = ($manifest.PSObject.Properties.Name -contains 'patchedSteamAutoStart') -and [bool]$manifest.patchedSteamAutoStart
+    if ($patchedAutoStart) {
+        $current = Get-SteamAutoStartCommand
+        if ($current -and (Test-SteamAutoStartHasDev -Command $current)) {
+            $new = ($current -replace '(^|\s)-dev(?=\s|$)', '').Trim() -replace '\s{2,}', ' '
+            if ($PSCmdlet.ShouldProcess('HKCU\...\Run\Steam', 'Remove -dev from Steam autostart')) {
+                Write-Log "Unpatching Steam autostart: '$current' -> '$new'"
+                Set-SteamAutoStartCommand -Value $new
             }
         }
     }
