@@ -82,9 +82,12 @@ jobs:
 
       - name: Install JS dependencies
         working-directory: ./frontend
+        # Dependency build scripts (esbuild) are allowed by upstream's
+        # frontend/pnpm-workspace.yaml `allowBuilds`. Do not re-add
+        # --dangerously-allow-all-builds: pnpm 12 removed that flag.
         run: |
           npm i -g pnpm
-          pnpm i --frozen-lockfile --dangerously-allow-all-builds
+          pnpm i --frozen-lockfile
 
       - name: Build JS frontend
         working-directory: ./frontend
