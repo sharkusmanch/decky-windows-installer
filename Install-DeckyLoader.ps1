@@ -49,13 +49,6 @@
 .PARAMETER Force
     Skip the "Steam is running" guard.
 
-.PARAMETER PatchSteamAutoStart
-    Patch Steam's "Launch at startup" registry entry (HKCU\...\Run\Steam)
-    to include the -dev flag, so Decky still loads when Steam is started
-    by Windows at login. Once enabled, subsequent installs reapply the
-    patch automatically (Steam may rewrite the entry on its own updates,
-    wiping the flag). Reverted by -Uninstall.
-
 .EXAMPLE
     .\Install-DeckyLoader.ps1 -Source 'C:\Downloads\PluginLoader Win.zip'
     Install from a local zip (no SHA256 needed for local files).
@@ -85,8 +78,7 @@ param(
     [switch]$NoAutoStart,
     [switch]$NoLaunch,
     [switch]$PurgeUserData,
-    [switch]$Force,
-    [switch]$PatchSteamAutoStart
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -443,14 +435,16 @@ Refusing to download from a URL without integrity verification.
             $createdCef = $true
         }
 
-        # Preserve patchedSteamAutoStart across re-installs so Steam updates
-        # that rewrite HKCU\...\Run\Steam (and wipe -dev) get re-patched on
-        # the next install.
+        # Steam's -dev flag is not required: Decky injects into SharedJSContext
+        # and its QAM tab renders in a Steam launched with no arguments
+        # (verified against Steam's own ExecCommandLine log). The installer no
+        # longer adds -dev anywhere. patchedSteamAutoStart is still carried
+        # forward so that installs predating this change can still have their
+        # registry patch reverted by -Uninstall.
         $existingPatchedAutoStart = $false
         if ($existing -and ($existing.PSObject.Properties.Name -contains 'patchedSteamAutoStart')) {
             $existingPatchedAutoStart = [bool]$existing.patchedSteamAutoStart
         }
-        $wantPatchAutoStart = [bool]$PatchSteamAutoStart -or $existingPatchedAutoStart
 
         $manifest = [ordered]@{
             version                 = 2
@@ -463,7 +457,7 @@ Refusing to download from a URL without integrity verification.
             autoStartShortcut       = $null
             cefDebugFile            = $cefFlag
             createdCefFile          = $createdCef
-            patchedSteamAutoStart   = $false
+            patchedSteamAutoStart   = $existingPatchedAutoStart
         }
 
         foreach ($d in $HomebrewDir, $ServicesDir) {
@@ -493,11 +487,21 @@ Refusing to download from a URL without integrity verification.
             throw "Expected PluginLoader_noconsole.exe at $pluginLoaderNoConsole - extraction may have failed."
         }
 
-        Write-Log "Creating $ShortcutDecky"
-        New-Shortcut -Path $ShortcutDecky -TargetPath $steamExe `
-            -Arguments '-dev' -WorkingDirectory $steamPath `
-            -Description 'Launch Steam with Decky Loader'
-        $manifest.deckyShortcut = $ShortcutDecky
+        # The "Steam (Decky)" desktop shortcut existed only to pass -dev, which
+        # is not required. Remove one left behind by an earlier install. The
+        # manifest field stays in the schema so -Uninstall still cleans up
+        # installs that predate this change.
+        if ($existing -and ($existing.PSObject.Properties.Name -contains 'deckyShortcut') -and $existing.deckyShortcut) {
+            $staleShortcut = $existing.deckyShortcut
+            if (-not (Test-PathUnderRoot -Candidate $staleShortcut -Roots @($DesktopPath))) {
+                Write-Log "Refusing to remove deckyShortcut = $staleShortcut (outside Desktop)" 'WARN'
+            } elseif (Test-Path $staleShortcut) {
+                if ($PSCmdlet.ShouldProcess($staleShortcut, 'Remove obsolete Steam (Decky) shortcut')) {
+                    Write-Log "Removing obsolete $staleShortcut (-dev is not required)"
+                    Remove-Item $staleShortcut -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
         Save-Manifest -Manifest $manifest
 
         if (-not $NoAutoStart) {
@@ -511,23 +515,12 @@ Refusing to download from a URL without integrity verification.
             Write-Log 'Skipping Startup folder shortcut (-NoAutoStart)'
         }
 
-        if ($wantPatchAutoStart) {
+        if ($existingPatchedAutoStart) {
             $current = Get-SteamAutoStartCommand
-            if (-not $current) {
-                Write-Log "No Steam autostart entry at HKCU\...\Run\Steam; skipping -PatchSteamAutoStart. (Enable Steam's 'Launch at startup' setting first.)" 'WARN'
-                $manifest.patchedSteamAutoStart = $existingPatchedAutoStart
-            } elseif (Test-SteamAutoStartHasDev -Command $current) {
-                Write-Log "Steam autostart already includes -dev; no change: $current"
-                $manifest.patchedSteamAutoStart = $existingPatchedAutoStart -or [bool]$PatchSteamAutoStart
-            } else {
-                $new = "$current -dev"
-                if ($PSCmdlet.ShouldProcess('HKCU\...\Run\Steam', 'Add -dev to Steam autostart')) {
-                    Write-Log "Patching Steam autostart: '$current' -> '$new'"
-                    Set-SteamAutoStartCommand -Value $new
-                    $manifest.patchedSteamAutoStart = $true
-                }
+            if ($current -and (Test-SteamAutoStartHasDev -Command $current)) {
+                Write-Log "Steam autostart still carries the -dev flag added by an earlier install: $current"
+                Write-Log "-dev is not required. Run -Uninstall to revert it, or edit HKCU\...\Run\Steam yourself."
             }
-            Save-Manifest -Manifest $manifest
         }
 
         Write-Log 'PluginLoader binary provenance:'
@@ -545,9 +538,8 @@ Refusing to download from a URL without integrity verification.
         Write-Log '== Install complete =='
         Write-Host ''
         Write-Host 'Next steps:' -ForegroundColor Cyan
-        Write-Host '  1. Make sure Steam is closed.'
-        Write-Host '  2. Launch Steam via the new "Steam (Decky)" desktop shortcut.'
-        Write-Host '  3. In Big Picture Mode: Ctrl+2 (or Steam button + A on a controller) to open the QAM.'
+        Write-Host '  1. Start Steam normally - no special shortcut or flags needed.'
+        Write-Host '  2. In Big Picture Mode: Ctrl+2 (or Steam button + A on a controller) to open the QAM.'
         Write-Host ''
         Write-Host 'Note: Windows Defender / SmartScreen may flag PluginLoader.exe.' -ForegroundColor Yellow
         Write-Host '      You may need to add an exclusion for homebrew\services.' -ForegroundColor Yellow

@@ -46,10 +46,9 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 
 ### After install
 
-1. Close Steam if running.
-2. Launch Steam via the new **Steam (Decky)** desktop shortcut (it adds `-dev`).
-3. Enter Big Picture Mode.
-4. Press **Ctrl + 2** (or Steam button + A on a controller) to open the Quick Access Menu — Decky's tab appears there.
+1. Start Steam normally — no special shortcut, no launch flags.
+2. Enter Big Picture Mode.
+3. Press **Ctrl + 2** (or Steam button + A on a controller) to open the Quick Access Menu — Decky's tab appears there.
 
 ## Parameters
 
@@ -63,7 +62,6 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 | `-NoLaunch` | switch | Don't launch PluginLoader after install |
 | `-PurgeUserData` | switch | On uninstall, also delete `%USERPROFILE%\homebrew` |
 | `-Force` | switch | Skip the "Steam is running" guard |
-| `-PatchSteamAutoStart` | switch | Add `-dev` to Steam's `HKCU\...\Run\Steam` autostart command so Decky loads when Steam launches at Windows login. Self-healing across re-installs. Reverted by `-Uninstall` |
 | `-WhatIf`, `-Confirm` | switch | Standard PowerShell `SupportsShouldProcess` switches; especially useful with `-Uninstall` |
 
 `Get-Help .\Install-DeckyLoader.ps1 -Detailed` shows the full comment-based help.
@@ -114,11 +112,6 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 .\Install-DeckyLoader.ps1 -Uninstall -PurgeUserData
 ```
 
-**Install and patch Steam autostart so Decky works with "Launch Steam at startup":**
-```powershell
-.\Install-DeckyLoader.ps1 -AllowUnpinned -PatchSteamAutoStart
-```
-
 ## What it does
 
 On install:
@@ -132,7 +125,7 @@ On install:
 7. Creates `%USERPROFILE%\homebrew\services\` if missing.
 8. Creates `.cef-enable-remote-debugging` in the Steam install dir (only if not already present).
 9. Extracts the zip with **Zip-Slip protection** — every entry's resolved path is validated to stay within the destination before extraction.
-10. Creates **Steam (Decky).lnk** on the Desktop (target: `steam.exe -dev`).
+10. Removes an obsolete **Steam (Decky).lnk** left on the Desktop by an earlier version of this installer (it existed only to pass `-dev`, which is not required).
 11. Creates **Decky Loader.lnk** in the Startup folder (target: `PluginLoader_noconsole.exe`) unless `-NoAutoStart`.
 12. Reports SHA256 and Authenticode signature status of `PluginLoader_noconsole.exe`.
 13. Launches `PluginLoader_noconsole.exe` unless `-NoLaunch` (`-Confirm` will prompt before launch).
@@ -155,7 +148,6 @@ On uninstall (manifest-driven, with safety rails):
 | `<SteamInstall>\.cef-enable-remote-debugging` | Required by Decky to attach to Steam's CEF |
 | `%USERPROFILE%\homebrew\services\PluginLoader*.exe` | Loader binaries |
 | `%LOCALAPPDATA%\decky-installer\install-manifest.json` | Install manifest (used by `-Uninstall`) |
-| `%USERPROFILE%\Desktop\Steam (Decky).lnk` | Steam launcher with `-dev` |
 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Decky Loader.lnk` | Autostart (unless `-NoAutoStart`) |
 | `%LOCALAPPDATA%\decky-installer\install.log` | Persistent log |
 | `%TEMP%\PluginLoader-<timestamp>-<rand>.zip` | Temporary download (deleted after install or on failure) |
@@ -173,15 +165,15 @@ gh workflow run build-decky.yml --repo sharkusmanch/decky-windows-installer `
     -f decky_ref=v3.2.3 -f publish_release=true
 ```
 
-## Steam "Launch at startup"
+## Steam's `-dev` flag is not required
 
-If you have Steam set to launch at Windows startup (Settings → Interface → "Run Steam when my computer starts"), Steam writes its autostart command to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Steam` — and that command does not include `-dev`. Decky needs `-dev` to inject its UI; without it Steam runs but Decky's tab doesn't appear in the QAM, even though `PluginLoader_noconsole.exe` is running.
+Earlier versions of this installer created a **Steam (Decky)** desktop shortcut that launched `steam.exe -dev`, and offered a `-PatchSteamAutoStart` switch that appended `-dev` to Steam's `HKCU\...\Run\Steam` autostart command. Both were based on the belief that Decky needs `-dev` to inject its UI.
 
-The `-PatchSteamAutoStart` switch fixes this by appending `-dev` to that registry value. The fix is idempotent and **self-healing**: every subsequent install reapplies the patch, so when Steam rewrites its own autostart entry on a Steam update (which wipes the flag), the next time you re-run the installer the patch is back. `-Uninstall` reverts it.
+That is not the case. Verified on 2026-09-11 against Steam's own `ExecCommandLine` log (the process command line is unreliable — Steam re-execs itself and the surviving `steam.exe` shows no arguments either way): with Steam launched as a bare `steam.exe`, Decky injected into `SharedJSContext`, `DeckyPluginLoader` and `DeckyBackend` were both present, all enabled plugins loaded, and the Decky tab rendered in the Quick Access Menu.
 
-```powershell
-.\Install-DeckyLoader.ps1 -AllowUnpinned -PatchSteamAutoStart
-```
+Both mechanisms have been removed. Start Steam however you like, including via Steam's own "Launch at startup" setting.
+
+If you previously ran `-PatchSteamAutoStart`, your registry still carries the flag. It is harmless, and `-Uninstall` still reverts it; a normal install will tell you it is there.
 
 ## QAM "update available" notification
 
@@ -197,7 +189,6 @@ To "update" on Windows, **re-run this installer**. It stops the loader, replaces
 - **Windows Defender / SmartScreen** may flag `PluginLoader.exe`. The script logs the binary's SHA256 and Authenticode signature status so you can compare against an expected value before launch. You may need to add `homebrew\services` to your antivirus exclusions.
 - **Port 1337 conflicts.** Decky listens on port 1337. Other software (notably Razer Synapse) can claim that port and prevent Decky from starting.
 - **Plugin compatibility on Windows is limited.** Confirmed working: Audio Loader, CSS Loader, IsThereAnyDeal For Deck, PlayCount, PlayTime, ProtonDB Badges, SteamGridDB, TabMaster, Web Browser. Other plugins may not work or may not display correctly.
-- **Steam's "Launch at startup" bypasses Decky** unless you re-run the installer with `-PatchSteamAutoStart`. See the [Steam "Launch at startup"](#steam-launch-at-startup) section above.
 
 ## Security notes
 
