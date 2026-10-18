@@ -28,13 +28,15 @@
 .PARAMETER Prerelease
     Install the newest Windows build in this installer's repo, including
     builds of upstream Decky prereleases (e.g. v3.3.0-pre1). A stable
-    release wins over its own prereleases. Still requires -ExpectedSha256
-    or -AllowUnpinned, like any URL source.
+    release wins over its own prereleases. The download is
+    automatically verified against the SHA256 GitHub recorded for the
+    release asset, so -AllowUnpinned is not needed. Pass -ExpectedSha256 to
+    pin to a hash you obtained independently instead.
 
 .PARAMETER ExpectedSha256
     Verify the download matches this SHA256 hash before extracting. Aborts
     on mismatch. Required when -Source is a URL unless -AllowUnpinned is
-    also specified. Local zip sources do not need this.
+    also specified. Local zip sources and -Prerelease do not need this.
 
 .PARAMETER AllowUnpinned
     Permit URL downloads without SHA256 verification. Discouraged - you
@@ -68,8 +70,9 @@
     Install from default URL with no integrity check (not recommended).
 
 .EXAMPLE
-    .\Install-DeckyLoader.ps1 -Prerelease -AllowUnpinned
-    Install the newest build, including upstream Decky prereleases.
+    .\Install-DeckyLoader.ps1 -Prerelease
+    Install the newest build, including upstream Decky prereleases, verified
+    against the SHA256 GitHub recorded for the release asset.
 
 .EXAMPLE
     .\Install-DeckyLoader.ps1 -Uninstall -WhatIf
@@ -352,10 +355,11 @@ function Resolve-PluginLoaderZip {
 }
 
 function Resolve-PrereleaseSource {
-    # Returns the download URL of the newest PluginLoader-Win.zip among this
-    # repo's decky-vX.Y.Z[-preN] releases, prereleases included. Ordered by
-    # version rather than date, since a stable release and a prerelease can
-    # be published by the same watcher run.
+    # Returns the download URL and GitHub-recorded SHA256 (or $null) of the
+    # newest PluginLoader-Win.zip among this repo's decky-vX.Y.Z[-preN]
+    # releases, prereleases included. Ordered by version rather than date,
+    # since a stable release and a prerelease can be published by the same
+    # watcher run.
     Write-Log "Looking up newest release (prereleases included): $ReleasesApi"
     $releases = Invoke-RestMethod -Uri $ReleasesApi -UseBasicParsing `
         -UserAgent 'decky-installer-ps/2.0' -Headers @{ Accept = 'application/vnd.github+json' }
@@ -369,14 +373,21 @@ function Resolve-PrereleaseSource {
         $key = '{0:D6}.{1:D6}.{2:D6}.{3:D10}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $pre
         $asset = @($r.assets) | Where-Object { $_.name -eq 'PluginLoader-Win.zip' } | Select-Object -First 1
         if ($asset -and $key -gt $bestKey) {
-            $best = [pscustomobject]@{ Tag = $r.tag_name; Prerelease = [bool]$r.prerelease; Url = $asset.browser_download_url }
+            $digest = $null
+            if ($asset.PSObject.Properties.Name -contains 'digest' -and "$($asset.digest)" -match '^sha256:([0-9a-fA-F]{64})$') {
+                $digest = $Matches[1].ToUpperInvariant()
+            }
+            $best = [pscustomobject]@{
+                Tag = $r.tag_name; Prerelease = [bool]$r.prerelease
+                Url = $asset.browser_download_url; Sha256 = $digest
+            }
             $bestKey = $key
         }
     }
     if (-not $best) { throw "No decky-v* release with a PluginLoader-Win.zip asset found at $ReleasesApi" }
     $kind = if ($best.Prerelease) { 'prerelease' } else { 'stable' }
     Write-Log "Newest release: $($best.Tag) ($kind)"
-    return $best.Url
+    return $best
 }
 
 function Get-SteamAutoStartCommand {
@@ -427,7 +438,16 @@ function Invoke-Install {
         if ($SourceExplicit) { throw '-Prerelease and -Source cannot be used together.' }
         # Shadows the script-level -Source for the rest of the install,
         # including the manifest's recorded source.
-        $Source = Resolve-PrereleaseSource
+        $release = Resolve-PrereleaseSource
+        $Source = $release.Url
+        # GitHub computes an asset's digest at upload. Pinning to it catches
+        # corrupted or tampered downloads, though it still trusts GitHub
+        # rather than being an independent pin. An explicit -ExpectedSha256
+        # takes precedence.
+        if (-not $expected -and $release.Sha256) {
+            $expected = $release.Sha256
+            Write-Log "Pinned to GitHub's recorded SHA256 for this asset: $expected"
+        }
     }
 
     $sourceIsLocal = Test-Path -LiteralPath $Source -PathType Leaf

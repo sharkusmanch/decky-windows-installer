@@ -32,6 +32,14 @@ For higher assurance about the **script** itself, pin to a specific commit so yo
 $f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/<commit-sha>/Install-DeckyLoader.ps1 -OutFile $f; & $f -AllowUnpinned
 ```
 
+**Prerelease builds.** To get the newest build including upstream Decky prereleases (e.g. `v3.3.0-pre1`), use `-Prerelease` instead:
+
+```powershell
+$f="$env:TEMP\Install-DeckyLoader.ps1"; iwr https://raw.githubusercontent.com/sharkusmanch/decky-windows-installer/main/Install-DeckyLoader.ps1 -OutFile $f; & $f -Prerelease
+```
+
+It picks the newest release here, prerelease or stable (a stable release beats its own prereleases). It verifies the zip against the SHA256 GitHub recorded when the asset was uploaded, so `-AllowUnpinned` isn't needed. Run it again later to move to a newer build. Run the default command above to return to the latest stable build.
+
 Running a remote installer means trusting both the script and the loader binary — Option 2 lets you inspect both before running.
 
 ### Option 2: Clone and run
@@ -56,8 +64,8 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 |---|---|---|
 | `-Uninstall` | switch | Reverse the install using the manifest |
 | `-Source` | string | Local zip path or HTTP(S) URL. Default: this repo's `releases/latest` Windows asset (auto-built from upstream Decky tags by the build-decky workflow) |
-| `-Prerelease` | switch | Install the newest build in this repo's releases, including builds of upstream Decky prereleases (e.g. `v3.3.0-pre1`). A stable release wins over its own prereleases. Cannot be combined with `-Source` |
-| `-ExpectedSha256` | string | Verify download SHA256 before extracting; abort on mismatch. Required for URL sources unless `-AllowUnpinned` is set |
+| `-Prerelease` | switch | Install the newest build in this repo's releases, including builds of upstream Decky prereleases (e.g. `v3.3.0-pre1`). A stable release wins over its own prereleases. Verified against the asset's GitHub-recorded SHA256 unless `-ExpectedSha256` is given. Cannot be combined with `-Source` |
+| `-ExpectedSha256` | string | Verify download SHA256 before extracting; abort on mismatch. Required for URL sources unless `-AllowUnpinned` or `-Prerelease` is set |
 | `-AllowUnpinned` | switch | Permit URL downloads without SHA256 verification (not recommended) |
 | `-NoAutoStart` | switch | Skip the Startup folder shortcut |
 | `-NoLaunch` | switch | Don't launch PluginLoader after install |
@@ -81,11 +89,11 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
     -ExpectedSha256 '98B9587FA171806730D9489737228BB8FC01066E6856B5928DD8F50D4384D344'
 ```
 
-**Install the newest build, including upstream Decky prereleases:**
+**Install the newest build, including upstream Decky prereleases (auto-verified against GitHub's recorded SHA256):**
 ```powershell
-.\Install-DeckyLoader.ps1 -Prerelease -AllowUnpinned
+.\Install-DeckyLoader.ps1 -Prerelease
 ```
-Prereleases are published as GitHub prereleases here, so the default `releases/latest` source never picks one up. To pin a prerelease instead, pass its release URL as `-Source` with `-ExpectedSha256`, like any other release.
+Prereleases are published as GitHub prereleases here, so the default `releases/latest` source never picks one up. To pin a specific prerelease instead, pass its release URL as `-Source` with `-ExpectedSha256`, like any other release.
 
 **Install from a local zip (no SHA256 needed for local files):**
 ```powershell
@@ -123,7 +131,7 @@ Prereleases are published as GitHub prereleases here, so the default `releases/l
 
 On install:
 
-1. Validates `-ExpectedSha256` format if provided; refuses URL downloads with no integrity pin unless `-AllowUnpinned`.
+1. Validates `-ExpectedSha256` format if provided. With `-Prerelease`, looks up the newest release and, without `-ExpectedSha256`, pins to the asset's GitHub-recorded SHA256. Refuses URL downloads with no integrity pin unless `-AllowUnpinned`.
 2. Resolves Steam install path from registry (`HKLM\SOFTWARE\WOW6432Node\Valve\Steam\InstallPath`, with fallbacks).
 3. Aborts if Steam (or `steamwebhelper` / `steamservice`) is running (override with `-Force`).
 4. Probes write access to the Steam install dir; suggests elevation only if needed.
@@ -173,6 +181,8 @@ To trigger a build manually (e.g. of a specific tag or `main`):
 gh workflow run build-decky.yml --repo sharkusmanch/decky-windows-installer `
     -f decky_ref=v3.2.3 -f publish_release=true
 ```
+
+Add `-f make_latest=false` when rebuilding an older stable tag, or it becomes `latest` and the installer's default goes backwards. Prerelease builds are never marked latest regardless.
 
 ## Steam's `-dev` flag is not required
 

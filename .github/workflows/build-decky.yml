@@ -63,11 +63,23 @@ jobs:
           DECKY_REF: ${{ inputs.decky_ref }}
         run: |
           # Only an upstream release with prerelease=false counts as stable;
-          # prerelease tags, branches and SHAs are all published as prereleases.
-          stable=$(gh api "repos/SteamDeckHomebrew/decky-loader/releases/tags/${DECKY_REF}" -q .prerelease 2>/dev/null || true)
-          if [ "$stable" = "false" ]; then prerelease=false; else prerelease=true; fi
+          # prerelease tags, branches and SHAs (no release: HTTP 404) are all
+          # published as prereleases. Any other API failure aborts the build
+          # rather than publishing a stable tag as a prerelease, which the
+          # watcher would never revisit.
+          if flag=$(gh api "repos/SteamDeckHomebrew/decky-loader/releases/tags/${DECKY_REF}" -q .prerelease 2>gh-err.txt); then
+            if [ "$flag" = "false" ]; then prerelease=false; else prerelease=true; fi
+          elif grep -q '(HTTP 404)' gh-err.txt; then
+            prerelease=true
+          else
+            cat gh-err.txt >&2
+            exit 1
+          fi
           echo "Upstream ref ${DECKY_REF}: prerelease=${prerelease}"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          # Artifact names must be unique within a run (the watcher builds
+          # several refs in one run) and cannot contain '/'.
+          echo "artifact=PluginLoader-Win-${DECKY_REF//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout upstream decky-loader source
         uses: actions/checkout@v4
@@ -77,6 +89,9 @@ jobs:
           # poetry-dynamic-versioning needs full git history + tags to
           # generate the embedded version string.
           fetch-depth: 0
+          # Upstream build scripts run in this job; don't leave this repo's
+          # write token in .git/config for them.
+          persist-credentials: false
 
       # Use the Node/Python versions upstream's own Windows build uses at this
       # ref: build-win.yml up to v3.2.x (Node 20, Python 3.11.7), the shared
@@ -135,7 +150,10 @@ jobs:
       # Each build is moved into ../out under a fixed name. Up to v3.2.x the
       # spec names the no-console build PluginLoader_noconsole.exe; from
       # v3.3.0-pre1 both builds are written as dist/PluginLoader.exe, so
-      # the second would otherwise overwrite the first.
+      # the second would otherwise overwrite the first. Also from v3.3.0 the
+      # spec reads DECKY_NOCONSOLE with a default of '0', and bool('0') is
+      # True, so upstream's "console" build has no console window either.
+      # Mirrored as-is; the installer only runs the no-console exe.
       - name: Build Python backend (with console)
         working-directory: ./backend
         run: |
@@ -174,16 +192,18 @@ jobs:
       - name: Compute SHA256
         id: hash
         shell: pwsh
+        env:
+          DECKY_REF: ${{ inputs.decky_ref }}
         run: |
           $hash = (Get-FileHash PluginLoader-Win.zip -Algorithm SHA256).Hash
           "sha256=$hash" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
-          "## Build summary`n- decky-loader ref: ``${{ inputs.decky_ref }}```n- prerelease: ``${{ steps.classify.outputs.prerelease }}```n- embedded version: ``${{ steps.version.outputs.version }}```n- zip SHA256: ``$hash``" `
+          "## Build summary`n- decky-loader ref: ``$env:DECKY_REF```n- prerelease: ``${{ steps.classify.outputs.prerelease }}```n- embedded version: ``${{ steps.version.outputs.version }}```n- zip SHA256: ``$hash``" `
             | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PluginLoader-Win
+          name: ${{ steps.classify.outputs.artifact }}
           path: PluginLoader-Win.zip
 
       - name: Publish release

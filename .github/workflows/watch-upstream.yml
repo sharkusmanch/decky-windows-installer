@@ -35,17 +35,24 @@ jobs:
         run: |
           set -euo pipefail
           upstream=SteamDeckHomebrew/decky-loader
-          stable=$(gh api "repos/$upstream/releases/latest" -q .tag_name)
-          stable_at=$(gh api "repos/$upstream/releases/latest" -q .published_at)
+          latest=$(gh api "repos/$upstream/releases/latest" -q '[.tag_name, .published_at] | @tsv')
+          read -r stable stable_at <<<"$latest"
           pre=$(gh api "repos/$upstream/releases?per_page=30" -q \
             "[.[] | select(.prerelease and (.draft | not) and .published_at > \"$stable_at\")]
              | sort_by(.published_at) | last | .tag_name // empty")
           echo "Upstream latest release:    $stable"
           echo "Upstream newer prerelease:  ${pre:-<none>}"
 
+          # Built = our release exists *with* its zip; a release whose asset
+          # upload failed is rebuilt (softprops updates the existing release).
+          built() {
+            gh release view "decky-$1" --repo "${{ github.repository }}" --json assets -q '.assets[].name' 2>/dev/null \
+              | grep -qx PluginLoader-Win.zip
+          }
+
           todo=()
           for tag in $stable $pre; do
-            if gh release view "decky-$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            if built "$tag"; then
               echo "decky-$tag already built."
             else
               echo "decky-$tag needs a build."
@@ -90,7 +97,8 @@ jobs:
           set -euo pipefail
           built=()
           for tag in $(jq -r '.[]' <<<"$TAGS"); do
-            if gh release view "decky-$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            if gh release view "decky-$tag" --repo "${{ github.repository }}" --json assets -q '.assets[].name' 2>/dev/null \
+                | grep -qx PluginLoader-Win.zip; then
               echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $tag -> decky-$tag" >> .builds
               built+=("$tag")
             fi
