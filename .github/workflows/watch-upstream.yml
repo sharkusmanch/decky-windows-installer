@@ -1,11 +1,13 @@
 name: Watch upstream Decky releases
 
-# Polls SteamDeckHomebrew/decky-loader's latest release every few hours.
-# When a new release tag appears that we have not built yet, calls
-# build-decky.yml to build and publish the corresponding Windows zip,
-# then appends to .builds (which both records the build and counts as
-# repo activity to keep this scheduled workflow alive — GitHub auto-
-# disables scheduled workflows after 60 days of repo inactivity).
+# Polls SteamDeckHomebrew/decky-loader's releases every few hours. The
+# candidates are the latest stable release and the newest prerelease (only
+# if it was published after that stable release). Each candidate we have
+# not built yet is built and published by build-decky.yml, which publishes
+# upstream prereleases as GitHub prereleases here so they never become
+# `latest`. Each build is then appended to .builds (which both records the
+# build and counts as repo activity to keep this scheduled workflow alive —
+# GitHub auto-disables scheduled workflows after 60 days of repo inactivity).
 
 on:
   schedule:
@@ -24,54 +26,81 @@ jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      build:    ${{ steps.cmp.outputs.build }}
-      tag:      ${{ steps.cmp.outputs.tag }}
-      our_tag:  ${{ steps.cmp.outputs.our_tag }}
+      build: ${{ steps.cmp.outputs.build }}
+      tags:  ${{ steps.cmp.outputs.tags }}
     steps:
       - id: cmp
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          upstream=$(gh api repos/SteamDeckHomebrew/decky-loader/releases/latest -q .tag_name)
-          our_tag="decky-${upstream}"
-          echo "Upstream latest release: $upstream"
-          echo "Looking for our tag:    $our_tag"
-          if gh release view "$our_tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Already built; nothing to do."
+          upstream=SteamDeckHomebrew/decky-loader
+          stable=$(gh api "repos/$upstream/releases/latest" -q .tag_name)
+          stable_at=$(gh api "repos/$upstream/releases/latest" -q .published_at)
+          pre=$(gh api "repos/$upstream/releases?per_page=30" -q \
+            "[.[] | select(.prerelease and (.draft | not) and .published_at > \"$stable_at\")]
+             | sort_by(.published_at) | last | .tag_name // empty")
+          echo "Upstream latest release:    $stable"
+          echo "Upstream newer prerelease:  ${pre:-<none>}"
+
+          todo=()
+          for tag in $stable $pre; do
+            if gh release view "decky-$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "decky-$tag already built."
+            else
+              echo "decky-$tag needs a build."
+              todo+=("$tag")
+            fi
+          done
+
+          if [ ${#todo[@]} -eq 0 ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Need to build."
             echo "build=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$upstream" >> "$GITHUB_OUTPUT"
-            echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
+            echo "tags=$(printf '%s\n' "${todo[@]}" | jq -Rnc '[inputs]')" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     needs: check
     if: needs.check.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.check.outputs.tags) }}
     uses: ./.github/workflows/build-decky.yml
     with:
-      decky_ref: ${{ needs.check.outputs.tag }}
+      decky_ref: ${{ matrix.tag }}
       publish_release: true
-      release_tag: ${{ needs.check.outputs.our_tag }}
+      release_tag: decky-${{ matrix.tag }}
+      # build-decky.yml never marks a prerelease as latest.
       make_latest: true
 
   record:
     needs: [check, build]
-    if: needs.check.outputs.build == 'true'
+    # Run even if one matrix leg failed, so the other leg is still recorded.
+    if: always() && needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Append to .builds and commit
         env:
           GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ needs.check.outputs.tags }}
         run: |
           set -euo pipefail
-          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          echo "${ts}  ${{ needs.check.outputs.tag }} -> ${{ needs.check.outputs.our_tag }}" >> .builds
+          built=()
+          for tag in $(jq -r '.[]' <<<"$TAGS"); do
+            if gh release view "decky-$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $tag -> decky-$tag" >> .builds
+              built+=("$tag")
+            fi
+          done
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "No builds were published; nothing to record."
+            exit 0
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .builds
-          git commit -m "Built decky ${{ needs.check.outputs.tag }}"
+          git commit -m "Built decky ${built[*]}"
           git push

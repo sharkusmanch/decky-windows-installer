@@ -23,7 +23,13 @@
     `latest` release of this installer's own repo, which holds Windows
     builds of Decky tagged from upstream releases (see the build-decky
     workflow). To pin to a specific release version, pass the release-
-    specific URL with -ExpectedSha256.
+    specific URL with -ExpectedSha256. Cannot be combined with -Prerelease.
+
+.PARAMETER Prerelease
+    Install the newest Windows build in this installer's repo, including
+    builds of upstream Decky prereleases (e.g. v3.3.0-pre1). A stable
+    release wins over its own prereleases. Still requires -ExpectedSha256
+    or -AllowUnpinned, like any URL source.
 
 .PARAMETER ExpectedSha256
     Verify the download matches this SHA256 hash before extracting. Aborts
@@ -62,6 +68,10 @@
     Install from default URL with no integrity check (not recommended).
 
 .EXAMPLE
+    .\Install-DeckyLoader.ps1 -Prerelease -AllowUnpinned
+    Install the newest build, including upstream Decky prereleases.
+
+.EXAMPLE
     .\Install-DeckyLoader.ps1 -Uninstall -WhatIf
     Show exactly what an uninstall would remove, without removing it.
 
@@ -73,6 +83,7 @@
 param(
     [switch]$Uninstall,
     [string]$Source = 'https://github.com/sharkusmanch/decky-windows-installer/releases/latest/download/PluginLoader-Win.zip',
+    [switch]$Prerelease,
     [string]$ExpectedSha256,
     [switch]$AllowUnpinned,
     [switch]$NoAutoStart,
@@ -82,6 +93,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Functions see only their own $PSBoundParameters, so capture this here.
+$SourceExplicit = $PSBoundParameters.ContainsKey('Source')
+$ReleasesApi    = 'https://api.github.com/repos/sharkusmanch/decky-windows-installer/releases?per_page=100'
 
 # --- paths
 $HomebrewDir   = Join-Path $env:USERPROFILE 'homebrew'
@@ -336,6 +351,34 @@ function Resolve-PluginLoaderZip {
     return [pscustomobject]@{ Path = $tmp; IsTemp = $true; IsUrl = $true }
 }
 
+function Resolve-PrereleaseSource {
+    # Returns the download URL of the newest PluginLoader-Win.zip among this
+    # repo's decky-vX.Y.Z[-preN] releases, prereleases included. Ordered by
+    # version rather than date, since a stable release and a prerelease can
+    # be published by the same watcher run.
+    Write-Log "Looking up newest release (prereleases included): $ReleasesApi"
+    $releases = Invoke-RestMethod -Uri $ReleasesApi -UseBasicParsing `
+        -UserAgent 'decky-installer-ps/2.0' -Headers @{ Accept = 'application/vnd.github+json' }
+    $best = $null
+    $bestKey = ''
+    foreach ($r in $releases) {
+        if ($r.draft) { continue }
+        if (-not ($r.tag_name -match '^decky-v(\d+)\.(\d+)\.(\d+)(?:-pre(\d+))?$')) { continue }
+        # A stable release sorts after all of its own prereleases.
+        $pre = if ($Matches[4]) { [int]$Matches[4] } else { [int]::MaxValue }
+        $key = '{0:D6}.{1:D6}.{2:D6}.{3:D10}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $pre
+        $asset = @($r.assets) | Where-Object { $_.name -eq 'PluginLoader-Win.zip' } | Select-Object -First 1
+        if ($asset -and $key -gt $bestKey) {
+            $best = [pscustomobject]@{ Tag = $r.tag_name; Prerelease = [bool]$r.prerelease; Url = $asset.browser_download_url }
+            $bestKey = $key
+        }
+    }
+    if (-not $best) { throw "No decky-v* release with a PluginLoader-Win.zip asset found at $ReleasesApi" }
+    $kind = if ($best.Prerelease) { 'prerelease' } else { 'stable' }
+    Write-Log "Newest release: $($best.Tag) ($kind)"
+    return $best.Url
+}
+
 function Get-SteamAutoStartCommand {
     # Returns the current value of HKCU\...\Run\Steam, or $null if absent.
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -379,6 +422,13 @@ function Invoke-Install {
 
     $expected = $null
     if ($ExpectedSha256) { $expected = Test-ExpectedSha256Format -Value $ExpectedSha256 }
+
+    if ($Prerelease) {
+        if ($SourceExplicit) { throw '-Prerelease and -Source cannot be used together.' }
+        # Shadows the script-level -Source for the rest of the install,
+        # including the manifest's recorded source.
+        $Source = Resolve-PrereleaseSource
+    }
 
     $sourceIsLocal = Test-Path -LiteralPath $Source -PathType Leaf
     $sourceIsUrl   = -not $sourceIsLocal -and ($Source -match '^https?://')

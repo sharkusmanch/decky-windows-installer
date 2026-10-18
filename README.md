@@ -56,6 +56,7 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
 |---|---|---|
 | `-Uninstall` | switch | Reverse the install using the manifest |
 | `-Source` | string | Local zip path or HTTP(S) URL. Default: this repo's `releases/latest` Windows asset (auto-built from upstream Decky tags by the build-decky workflow) |
+| `-Prerelease` | switch | Install the newest build in this repo's releases, including builds of upstream Decky prereleases (e.g. `v3.3.0-pre1`). A stable release wins over its own prereleases. Cannot be combined with `-Source` |
 | `-ExpectedSha256` | string | Verify download SHA256 before extracting; abort on mismatch. Required for URL sources unless `-AllowUnpinned` is set |
 | `-AllowUnpinned` | switch | Permit URL downloads without SHA256 verification (not recommended) |
 | `-NoAutoStart` | switch | Skip the Startup folder shortcut |
@@ -79,6 +80,12 @@ Lets you inspect `Install-DeckyLoader.ps1` before running, and pin to a commit b
     -Source 'https://github.com/sharkusmanch/decky-windows-installer/releases/download/decky-v3.2.3/PluginLoader-Win.zip' `
     -ExpectedSha256 '98B9587FA171806730D9489737228BB8FC01066E6856B5928DD8F50D4384D344'
 ```
+
+**Install the newest build, including upstream Decky prereleases:**
+```powershell
+.\Install-DeckyLoader.ps1 -Prerelease -AllowUnpinned
+```
+Prereleases are published as GitHub prereleases here, so the default `releases/latest` source never picks one up. To pin a prerelease instead, pass its release URL as `-Source` with `-ExpectedSha256`, like any other release.
 
 **Install from a local zip (no SHA256 needed for local files):**
 ```powershell
@@ -154,9 +161,11 @@ On uninstall (manifest-driven, with safety rails):
 
 ## Building Decky for Windows
 
-Upstream Decky's official GitHub releases ship only the Linux `PluginLoader` binary. This repo includes a workflow ([`build-decky.yml`](.github/workflows/build-decky.yml)) that checks out upstream Decky source at any tag/branch/SHA and produces a matching Windows `PluginLoader-Win.zip`, optionally publishing it as a release here. The build mirrors upstream's `build-win.yml` exactly (Node 20, Python 3.11.7, Poetry + poetry-dynamic-versioning, pnpm, PyInstaller) so the binary is byte-equivalent to what upstream's CI would produce.
+Up to v3.2.x, upstream Decky's GitHub releases shipped only the Linux `PluginLoader` binary. (From v3.3.0 they also attach Windows exes, but this repo still builds its own so the installer's zip format and release flow stay the same.) This repo includes a workflow ([`build-decky.yml`](.github/workflows/build-decky.yml)) that checks out upstream Decky source at any tag/branch/SHA and produces a matching Windows `PluginLoader-Win.zip`, optionally publishing it as a release here. The build mirrors upstream's own Windows build (Poetry + poetry-dynamic-versioning, pnpm, PyInstaller). It reads the Node and Python versions from upstream's workflow at the same ref: Node 20 and Python 3.11.7 up to v3.2.x, Node 26 and Python 3.14.8 from v3.3.0.
 
-A second workflow ([`watch-upstream.yml`](.github/workflows/watch-upstream.yml)) polls upstream every 6 hours; when a new release tag appears that we haven't built yet, it triggers the build, publishes a release here, and appends a line to `.builds`. The `.builds` commit doubles as activity that prevents GitHub from auto-disabling the schedule after 60 days.
+A second workflow ([`watch-upstream.yml`](.github/workflows/watch-upstream.yml)) polls upstream every 6 hours. It builds upstream's latest stable release and, if one was published after that, upstream's newest prerelease. For each one we haven't built yet, it publishes a release here and appends a line to `.builds`. The `.builds` commit doubles as activity that prevents GitHub from auto-disabling the schedule after 60 days.
+
+`build-decky.yml` publishes a release as a GitHub **prerelease** unless the ref is an upstream stable release tag. That covers upstream prereleases and manual builds of a branch or SHA such as `main`. Prereleases are never marked `latest`, so the installer's default source only ever serves stable builds; use `-Prerelease` to opt in.
 
 To trigger a build manually (e.g. of a specific tag or `main`):
 
@@ -179,7 +188,7 @@ If you previously ran `-PatchSteamAutoStart`, your registry still carries the fl
 
 Decky's QAM update flow is broken on Windows in two independent ways:
 
-1. **`do_update()` looks for an asset literally named `PluginLoader.exe` in upstream's releases**, which doesn't exist there.
+1. **Up to v3.2.x, `do_update()` looks for an asset literally named `PluginLoader.exe` in upstream's releases**, which doesn't exist there. (From v3.3.0 upstream publishes `PluginLoader-win*.exe` assets and looks for those, but point 2 still applies.)
 2. **The file-replacement step is wrapped in `if ON_LINUX:`**, so even a successful download wouldn't be installed.
 
 To "update" on Windows, **re-run this installer**. It stops the loader, replaces the binaries, and restarts. Building from a tagged upstream release (the default) makes the embedded version exactly match the tag, so the QAM stops nagging.
@@ -187,6 +196,7 @@ To "update" on Windows, **re-run this installer**. It stops the loader, replaces
 ## Known issues
 
 - **Windows Defender / SmartScreen** may flag `PluginLoader.exe`. The script logs the binary's SHA256 and Authenticode signature status so you can compare against an expected value before launch. You may need to add `homebrew\services` to your antivirus exclusions.
+- **"Unsupported Installation!" toast (v3.3.0+).** From v3.3.0 Decky reports every non-Linux install as unsupported and shows this toast when it starts. It is informational: Decky and plugins keep working.
 - **Port 1337 conflicts.** Decky listens on port 1337. Other software (notably Razer Synapse) can claim that port and prevent Decky from starting.
 - **Plugin compatibility on Windows is limited.** Confirmed working: Audio Loader, CSS Loader, IsThereAnyDeal For Deck, PlayCount, PlayTime, ProtonDB Badges, SteamGridDB, TabMaster, Web Browser. Other plugins may not work or may not display correctly.
 

@@ -7,6 +7,11 @@ name: Build Decky for Windows
 # Decky Loader is GPLv2. The artifact this workflow produces is a binary
 # redistribution of unmodified upstream source. Source for any released
 # build is available at the upstream commit/tag that was checked out.
+#
+# The release is published as a GitHub prerelease unless decky_ref is an
+# upstream *stable* release tag, so upstream prereleases (e.g. v3.3.0-pre1)
+# and branch/SHA builds never become this repo's `latest` release, which
+# is what the installer downloads by default.
 
 on:
   workflow_dispatch:
@@ -23,7 +28,7 @@ on:
         description: 'Release tag (default: decky-<ref>)'
         required: false
       make_latest:
-        description: 'Mark the release as latest'
+        description: 'Mark the release as latest (ignored for prereleases)'
         type: boolean
         default: true
   workflow_call:
@@ -50,6 +55,20 @@ jobs:
     name: Build Decky ${{ inputs.decky_ref }}
     runs-on: windows-2022
     steps:
+      - name: Classify upstream ref
+        id: classify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECKY_REF: ${{ inputs.decky_ref }}
+        run: |
+          # Only an upstream release with prerelease=false counts as stable;
+          # prerelease tags, branches and SHAs are all published as prereleases.
+          stable=$(gh api "repos/SteamDeckHomebrew/decky-loader/releases/tags/${DECKY_REF}" -q .prerelease 2>/dev/null || true)
+          if [ "$stable" = "false" ]; then prerelease=false; else prerelease=true; fi
+          echo "Upstream ref ${DECKY_REF}: prerelease=${prerelease}"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout upstream decky-loader source
         uses: actions/checkout@v4
         with:
@@ -59,15 +78,35 @@ jobs:
           # generate the embedded version string.
           fetch-depth: 0
 
-      - name: Set up Node 20
+      # Use the Node/Python versions upstream's own Windows build uses at this
+      # ref: build-win.yml up to v3.2.x (Node 20, Python 3.11.7), the shared
+      # build.yml from v3.3.0 (Node 26, Python 3.14.8). The Python version
+      # matters beyond the build: plugins run on the Python that PyInstaller
+      # embeds in PluginLoader.exe.
+      - name: Read upstream toolchain versions
+        id: toolchain
+        shell: pwsh
+        run: |
+          $wf = @('.github/workflows/build-win.yml', '.github/workflows/build.yml') |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $wf) { throw 'No upstream build workflow found to read toolchain versions from' }
+          $text = Get-Content -Raw $wf
+          if ($text -notmatch 'node-version:\s*["'']?([\d.]+)') { throw "No node-version in $wf" }
+          $node = $Matches[1]
+          if ($text -notmatch 'python-version:\s*["'']?([\d.]+)') { throw "No python-version in $wf" }
+          $python = $Matches[1]
+          Write-Host "From ${wf}: Node $node, Python $python"
+          "node=$node", "python=$python" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+
+      - name: Set up Node ${{ steps.toolchain.outputs.node }}
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ steps.toolchain.outputs.node }}
 
-      - name: Set up Python 3.11.7
+      - name: Set up Python ${{ steps.toolchain.outputs.python }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11.7'
+          python-version: ${{ steps.toolchain.outputs.python }}
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
@@ -93,17 +132,27 @@ jobs:
         working-directory: ./frontend
         run: pnpm run build
 
+      # Each build is moved into ../out under a fixed name. Up to v3.2.x the
+      # spec names the no-console build PluginLoader_noconsole.exe; from
+      # v3.3.0-pre1 both builds are written as dist/PluginLoader.exe, so
+      # the second would otherwise overwrite the first.
       - name: Build Python backend (with console)
         working-directory: ./backend
         run: |
           C:\Users\runneradmin\.local\bin\poetry dynamic-versioning
           C:\Users\runneradmin\.local\bin\poetry run pyinstaller pyinstaller.spec
+          New-Item -ItemType Directory -Force -Path ../out | Out-Null
+          Move-Item dist/PluginLoader.exe ../out/PluginLoader.exe
 
       - name: Build Python backend (no console)
         working-directory: ./backend
         run: |
           $env:DECKY_NOCONSOLE = '1'
           C:\Users\runneradmin\.local\bin\poetry run pyinstaller pyinstaller.spec
+          $built = @('dist/PluginLoader_noconsole.exe', 'dist/PluginLoader.exe') |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $built) { throw 'No-console build produced no PluginLoader exe in dist/' }
+          Move-Item $built ../out/PluginLoader_noconsole.exe
 
       - name: Capture embedded loader version
         id: version
@@ -118,7 +167,7 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path backend/dist/PluginLoader.exe, backend/dist/PluginLoader_noconsole.exe `
+            -Path out/PluginLoader.exe, out/PluginLoader_noconsole.exe `
             -DestinationPath PluginLoader-Win.zip `
             -Force
 
@@ -128,7 +177,7 @@ jobs:
         run: |
           $hash = (Get-FileHash PluginLoader-Win.zip -Algorithm SHA256).Hash
           "sha256=$hash" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
-          "## Build summary`n- decky-loader ref: ``${{ inputs.decky_ref }}```n- embedded version: ``${{ steps.version.outputs.version }}```n- zip SHA256: ``$hash``" `
+          "## Build summary`n- decky-loader ref: ``${{ inputs.decky_ref }}```n- prerelease: ``${{ steps.classify.outputs.prerelease }}```n- embedded version: ``${{ steps.version.outputs.version }}```n- zip SHA256: ``$hash``" `
             | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
 
       - name: Upload workflow artifact
@@ -143,7 +192,8 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || format('decky-{0}', inputs.decky_ref) }}
           name: Decky ${{ inputs.decky_ref }} (Windows)
-          make_latest: ${{ inputs.make_latest }}
+          prerelease: ${{ steps.classify.outputs.prerelease == 'true' }}
+          make_latest: ${{ inputs.make_latest && steps.classify.outputs.prerelease != 'true' }}
           files: PluginLoader-Win.zip
           body: |
             Windows build of [Decky Loader ${{ inputs.decky_ref }}](https://github.com/SteamDeckHomebrew/decky-loader/tree/${{ inputs.decky_ref }}).
