@@ -45,9 +45,19 @@ jobs:
 
           # Built = our release exists *with* its zip; a release whose asset
           # upload failed is rebuilt (softprops updates the existing release).
+          # Only a 404 means "no release": any other API error aborts, since
+          # rebuilding an existing release would change its zip's SHA256.
           built() {
-            gh release view "decky-$1" --repo "${{ github.repository }}" --json assets -q '.assets[].name' 2>/dev/null \
-              | grep -qx PluginLoader-Win.zip
+            local has
+            if has=$(gh release view "decky-$1" --repo "${{ github.repository }}" --json assets \
+                       -q 'any(.assets[]; .name == "PluginLoader-Win.zip")' 2>gh-err.txt); then
+              [ "$has" = "true" ]
+            elif grep -q '(HTTP 404)\|release not found' gh-err.txt; then
+              return 1
+            else
+              cat gh-err.txt >&2
+              exit 1
+            fi
           }
 
           todo=()
@@ -97,8 +107,8 @@ jobs:
           set -euo pipefail
           built=()
           for tag in $(jq -r '.[]' <<<"$TAGS"); do
-            if gh release view "decky-$tag" --repo "${{ github.repository }}" --json assets -q '.assets[].name' 2>/dev/null \
-                | grep -qx PluginLoader-Win.zip; then
+            if [ "$(gh release view "decky-$tag" --repo "${{ github.repository }}" --json assets \
+                      -q 'any(.assets[]; .name == "PluginLoader-Win.zip")' 2>/dev/null)" = "true" ]; then
               echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $tag -> decky-$tag" >> .builds
               built+=("$tag")
             fi
